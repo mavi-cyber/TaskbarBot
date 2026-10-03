@@ -67,6 +67,13 @@ sealed class Body
     public bool Bounced { get; private set; }
     public bool Resting { get; private set; }
 
+    /// <summary>Sends the body off with a new velocity, whether it was moving or at rest.</summary>
+    public void Kick(Vector velocity)
+    {
+        Vel = velocity;
+        Resting = false;
+    }
+
     public void Step(double dt, double g, double ground, double restitution, double friction)
     {
         if (Resting) return;

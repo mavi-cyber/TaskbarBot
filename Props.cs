@@ -16,13 +16,21 @@ static class Props
     public const string
         Can = "\U0001F96B", Bone = "\U0001F9B4", Fish = "\U0001F41F", Boot = "\U0001F97E",
         Paper = "\U0001F4C4", Banana = "\U0001F34C", Bin = "\U0001F5D1️", Sponge = "\U0001F9FD",
-        Ball = "\U0001F3B1", Bang = "❗", Anger = "\U0001F4A2";
+        Ball = "\U0001F3B1", Bang = "❗", Anger = "\U0001F4A2",
+        Phone = "\U0001F4F1", Coffee = "\u2615", Book = "\U0001F4D6", Speech = "\U0001F4AC",
+        Zzz = "\U0001F4A4", Pizza = "\U0001F355", Moon = "\U0001F319", Sun = "\u2600\uFE0F", Plug = "\U0001F50C",
+        LowBattery = "\U0001FAAB", Battery = "\U0001F50B", Zap = "\u26A1", Signal = "\U0001F4F6", Eyes = "\U0001F440",
+        Note = "\U0001F3B5", Boom = "\U0001F4A5", Party = "\U0001F389", Balloon = "\U0001F388", Soccer = "\u26BD",
+        Trophy = "\U0001F3C6", Burger = "\U0001F354", Cake = "\U0001F382", Broom = "\U0001F9F9", Handset = "\U0001F4DE",
+        Mic = "\U0001F3A4", Muted = "\U0001F507", Loud = "\U0001F50A", Question = "\u2753", Laugh = "\U0001F602", Idea = "\U0001F4A1";
 
     public static readonly Brush Steel = Frozen(0x6B, 0x72, 0x7C);
     public static readonly Brush Wood = Frozen(0x9A, 0x6B, 0x3F);
     public static readonly Brush Line = Frozen(0xDD, 0xDD, 0xDD);
     public static readonly Brush Pink = Frozen(0xFF, 0x3D, 0xB4);
     public static readonly Brush Lime = Frozen(0xB6, 0xFF, 0x3D);
+    public static readonly Brush Gold = Frozen(0xFF, 0xD2, 0x3F);
+    public static readonly Brush Sky = Frozen(0x4F, 0xC3, 0xF7);
     static readonly Brush White = Frozen(0xFA, 0xFA, 0xF5);
     static readonly Brush Red = Frozen(0xE0, 0x2B, 0x2B);
     static readonly Brush Teal = Frozen(0x2E, 0xC4, 0xB6);
@@ -116,6 +124,17 @@ static class Props
         Text(dc, "RULE!", Lime, r.Height * 0.5, new Point(r.X + r.Width / 2, r.Y + r.Height * 0.72), "Ink Free");
         dc.Pop();
         dc.Pop();
+    }
+
+    /// <summary>A speech bubble with words in it, centred on the given point.</summary>
+    public static void Speak(DrawingContext dc, string words, Point centre, double c)
+    {
+        var face = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+        var text = new FormattedText(words, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, face, 2.6 * c, Steel, 1.0);
+        var box = new Rect(centre.X - text.Width / 2 - c, centre.Y - text.Height / 2 - 0.5 * c, text.Width + 2 * c, text.Height + c);
+        dc.DrawRoundedRectangle(White, null, box, c, c);
+        dc.DrawRectangle(White, null, new Rect(centre.X - 0.5 * c, box.Bottom - 0.1 * c, c, 0.9 * c));      // the tail
+        dc.DrawText(text, new Point(centre.X - text.Width / 2, centre.Y - text.Height / 2));
     }
 
     static void Text(DrawingContext dc, string s, Brush brush, double size, Point centre, string font)

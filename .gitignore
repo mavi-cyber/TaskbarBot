@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+publish/
+release/
+
+# Editor and OS files
+.vs/
+.vscode/
+*.user
+Thumbs.db
+
+# Personal helper script
+push.bat

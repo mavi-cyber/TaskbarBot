@@ -22,6 +22,15 @@ static class Taskbar
         public List<Int32Rect> All { get; } = new();
         public Int32Rect? Start { get; set; }
         public Int32Rect? Clock { get; set; }
+        public Int32Rect? Search { get; set; }
+        public Int32Rect? Network { get; set; }
+        public Int32Rect? Battery { get; set; }
+        public Int32Rect? Volume { get; set; }
+        public Int32Rect? Chevron { get; set; }
+        public Int32Rect? Language { get; set; }
+
+        /// <summary>Every button in the corner with the clock, the clock included.</summary>
+        public List<Int32Rect> Tray { get; } = new();
     }
 
     /// <summary>
@@ -53,6 +62,18 @@ static class Taskbar
                 if (cls == "Taskbar.TaskListButtonAutomationPeer") scan.Apps.Add(rect);
                 else if (info.AutomationId == "StartButton" || cls == "Start") scan.Start = rect;
                 else if (cls is "SystemTray.OmniButton" or "TrayClockWClass") scan.Clock = rect;
+                else if (info.AutomationId == "SearchButton") scan.Search = rect;
+                else if (cls.StartsWith("SystemTray."))
+                {
+                    // Tray icons are only told apart by their spoken names, which are in the Windows language.
+                    string spoken = info.Name ?? "";
+                    if (spoken.StartsWith("Network")) scan.Network = rect;
+                    else if (spoken.StartsWith("Power") || spoken.StartsWith("Battery")) scan.Battery = rect;
+                    else if (spoken.StartsWith("Volume") || spoken.StartsWith("Speaker")) scan.Volume = rect;
+                    else if (spoken.StartsWith("Show Hidden")) scan.Chevron = rect;
+                    else if (spoken.StartsWith("Tray Input Indicator")) scan.Language = rect;
+                }
+                if (cls.StartsWith("SystemTray.") && cls != "SystemTray.ShowDesktopButton") scan.Tray.Add(rect);
             }
 
             // The older taskbar (Windows 10, or Windows 11 with a classic-taskbar tool) names things
@@ -94,6 +115,8 @@ static class Taskbar
         return SHQueryRecycleBin(null, ref info) == 0 ? info.i64NumItems : 0;
     }
 
+    public static IntPtr ForegroundHandle() => GetForegroundWindow();
+
     /// <summary>Visible bounds of the window the user is working in, or null for the desktop and shell.</summary>
     public static Int32Rect? ForegroundBounds()
     {
@@ -107,10 +130,37 @@ static class Taskbar
     }
 
     /// <summary>
+    /// Photographs a whole taskbar button as it is, plus a patch of bare taskbar the same size.
+    /// </summary>
+    public static (BitmapSource Whole, BitmapSource Cover)? Snapshot(Int32Rect button, bool vertical)
+    {
+        int w = button.Width, h = button.Height;
+        if (w < 4 || h < 4) return null;
+        var px = new int[w * h];
+        using (var bmp = new Drawing.Bitmap(w, h, Drawing.Imaging.PixelFormat.Format32bppArgb))
+        {
+            using (var g = Drawing.Graphics.FromImage(bmp))
+                g.CopyFromScreen(button.X, button.Y, 0, 0, new Drawing.Size(w, h));
+            var data = bmp.LockBits(new Drawing.Rectangle(0, 0, w, h),
+                Drawing.Imaging.ImageLockMode.ReadOnly, Drawing.Imaging.PixelFormat.Format32bppArgb);
+            Marshal.Copy(data.Scan0, px, 0, px.Length);
+            bmp.UnlockBits(data);
+        }
+        var cover = new int[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                cover[y * w + x] = (vertical ? px[w + x] : px[y * w + 1]) | unchecked((int)0xFF000000);
+                px[y * w + x] |= unchecked((int)0xFF000000);
+            }
+        return (ToBitmap(px, w, h), ToBitmap(cover, w, h));
+    }
+
+    /// <summary>
     /// Photographs the icon in one taskbar button. Returns null when the button is highlighted
     /// (active or hovered app), because its background cannot be told apart from the icon.
     /// </summary>
-    public static IconShot? Capture(Int32Rect button, bool vertical)
+    public static IconShot? Capture(Int32Rect button, bool vertical, bool whole = false)
     {
         int w = button.Width, h = button.Height;
         var px = new int[w * h];
@@ -139,43 +189,59 @@ static class Taskbar
             for (int y = h / 4; y < h * 3 / 4; y++, probes++)
                 if (Differs(px[y * w + (int)(w * 0.13)], Bare(0, y), 10)) highlighted++;
         }
-        if (highlighted > probes / 2) return null;
+        if (!whole && highlighted > probes / 2) return null;
 
         var cover = new int[w * h];
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++)
                 cover[y * w + x] = Bare(x, y) | unchecked((int)0xFF000000);
 
-        // Cut the icon out of the middle: flood in from the border over everything that still
-        // looks like bare taskbar and make that transparent.
-        int s = (int)Math.Round(Math.Min(w, h) * 0.62), x0 = (w - s) / 2, y0 = (h - s) / 2;
-        var icon = new int[s * s];
-        var isBack = new bool[s * s];
+        // Cut the picture out: flood in from the border over everything that still looks like bare
+        // taskbar and make that transparent. Normally only the middle of the button is taken (the
+        // app icon); with whole, everything on the button is (a tray icon, or the clock's digits).
+        int sw = whole ? w : (int)Math.Round(Math.Min(w, h) * 0.62), sh = whole ? h : sw;
+        int x0 = (w - sw) / 2, y0 = (h - sh) / 2;
+        var isBack = new bool[sw * sh];
         var queue = new Queue<int>();
         void Visit(int x, int y)
         {
-            if (x < 0 || y < 0 || x >= s || y >= s || isBack[y * s + x]) return;
+            if (x < 0 || y < 0 || x >= sw || y >= sh || isBack[y * sw + x]) return;
             if (Differs(px[(y0 + y) * w + x0 + x], Bare(x0 + x, y0 + y), 12)) return;
-            isBack[y * s + x] = true;
-            queue.Enqueue(y * s + x);
+            isBack[y * sw + x] = true;
+            queue.Enqueue(y * sw + x);
         }
-        for (int i = 0; i < s; i++) { Visit(i, 0); Visit(i, s - 1); Visit(0, i); Visit(s - 1, i); }
+        for (int i = 0; i < sw; i++) { Visit(i, 0); Visit(i, sh - 1); }
+        for (int i = 0; i < sh; i++) { Visit(0, i); Visit(sw - 1, i); }
         while (queue.Count > 0)
         {
-            int p = queue.Dequeue(), x = p % s, y = p / s;
+            int p = queue.Dequeue(), x = p % sw, y = p / sw;
             Visit(x - 1, y); Visit(x + 1, y); Visit(x, y - 1); Visit(x, y + 1);
         }
-        int solid = 0;
-        for (int y = 0; y < s; y++)
-            for (int x = 0; x < s; x++)
-                if (!isBack[y * s + x])
+
+        // What is left is the picture. Find its extent, so a small tray icon on a big button
+        // comes out as a small picture and not as a mostly empty one.
+        int left = sw, top = sh, right = -1, bottom = -1, solid = 0;
+        for (int y = 0; y < sh; y++)
+            for (int x = 0; x < sw; x++)
+                if (!isBack[y * sw + x])
                 {
-                    icon[y * s + x] = px[(y0 + y) * w + x0 + x] | unchecked((int)0xFF000000);
+                    left = Math.Min(left, x); right = Math.Max(right, x);
+                    top = Math.Min(top, y); bottom = Math.Max(bottom, y);
                     solid++;
                 }
-        if (solid < s * s / 10) return null;   // nothing there worth throwing around
+        if (!whole || right < left) { left = 0; top = 0; right = sw - 1; bottom = sh - 1; }
 
-        return new IconShot(ToBitmap(icon, s, s), ToBitmap(cover, w, h));
+        // The picture handed back is square, with the cut-out centred in it.
+        int cw = right - left + 1, ch = bottom - top + 1;
+        int side = Math.Max(cw, ch), ox = (side - cw) / 2, oy = (side - ch) / 2;
+        var icon = new int[side * side];
+        for (int y = top; y <= bottom; y++)
+            for (int x = left; x <= right; x++)
+                if (!isBack[y * sw + x])
+                    icon[(oy + y - top) * side + ox + x - left] = px[(y0 + y) * w + x0 + x] | unchecked((int)0xFF000000);
+        if (solid < (whole ? 12 : sw * sh / 10)) return null;      // nothing there worth throwing around
+
+        return new IconShot(ToBitmap(icon, side, side), ToBitmap(cover, w, h));
     }
 
     static bool Differs(int a, int b, int tolerance)

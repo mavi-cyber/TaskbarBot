@@ -22,7 +22,10 @@ public sealed partial class StageView : FrameworkElement
         public Point Centre => new(Slot.X + Slot.Width / 2, Slot.Y + Slot.Height / 2);
     }
 
-    readonly Bot[] bots = { new Bot(), new Bot() };
+    // Everyone on the taskbar, one bot per mascot, and the two of them acting in the current
+    // scene or game. Scripts are written for a pair; the rest of the cast carries on by itself.
+    readonly Bot[] cast = Array.ConvertAll(Skin.All, skin => new Bot(skin));
+    readonly Bot[] bots = new Bot[2];
     readonly Random rng = new();
 
     /// <summary>Y of the taskbar's top edge inside this element.</summary>
@@ -33,8 +36,8 @@ public sealed partial class StageView : FrameworkElement
 
     public double Cell
     {
-        get => bots[0].Cell;
-        set { foreach (Bot b in bots) b.Cell = value; }
+        get => cast[0].Cell;
+        set { foreach (Bot b in cast) b.Cell = value; }
     }
 
     double Edge => Bot.Cols * Cell / 2 + 8;
@@ -53,6 +56,7 @@ public sealed partial class StageView : FrameworkElement
     double cursorVx, cursorVy, dpiScale = 1, stageAngle;
     Point cursor;
     bool cursorSeen;
+    double cursorStill;                 // seconds since the pointer last moved
 
     /// <summary>How this element is turned on screen: 0 taskbar at the bottom, 90 left, 180 top, 270 right.</summary>
     public double StageAngle
@@ -81,14 +85,29 @@ public sealed partial class StageView : FrameworkElement
     {
         RenderOptions.SetEdgeMode(this, EdgeMode.Aliased);
         IsHitTestVisible = false;
-        bots[0].OtherX = () => bots[1].X;
-        bots[1].OtherX = () => bots[0].X;
+        bots[0] = cast[0];
+        bots[1] = cast[1];
+        foreach (Bot me in cast)
+            me.OtherX = () =>
+            {
+                // The nearest other bot, so a walk does not end on top of somebody.
+                double nearest = double.MaxValue;
+                foreach (Bot other in cast)
+                    if (other != me && Math.Abs(other.X - me.X) < Math.Abs(nearest - me.X)) nearest = other.X;
+                return nearest;
+            };
         nextAmbient = 30 + rng.NextDouble() * 40;
     }
 
-    public void Play(Move move) => bots[rng.Next(bots.Length)].Play(move);
+    public void Play(Move move)
+    {
+        // Give it to someone who is free, if anyone is.
+        var free = Array.FindAll(cast, b => b.IsIdle);
+        Bot[] pool = free.Length > 0 ? free : cast;
+        pool[rng.Next(pool.Length)].Play(move);
+    }
 
-    public void PlayAll() => bots[0].PlayAll();
+    public void PlayAll() => cast[rng.Next(cast.Length)].PlayAll();
 
     /// <summary>Stops whatever scene or game is running and uncovers anything hidden on the taskbar.</summary>
     public void AbortAll()
@@ -110,8 +129,15 @@ public sealed partial class StageView : FrameworkElement
             return;
         }
 
+        // First frame: spread the cast along the taskbar instead of dropping them in a heap.
+        for (int i = 0; i < cast.Length; i++)
+            if (double.IsNaN(cast[i].X))
+                cast[i].X = Edge + (i + 0.3 + 0.4 * rng.NextDouble()) / cast.Length * (w - 2 * Edge);
+
         TrackCursor(dt);
-        foreach (Bot b in bots)
+        Live(dt);
+        Watch(dt);
+        foreach (Bot b in cast)
         {
             if (b.External) b.BeginPose(dt, w);
             else b.Update(dt, w, cursor, GroundY);
@@ -120,10 +146,10 @@ public sealed partial class StageView : FrameworkElement
         if (scene is not null) StepScene();
         else if (phase != Phase.None) StepGame(dt);
         else Direct(dt);
-        foreach (Bot b in bots) b.EndFrame(dt);
+        foreach (Bot b in cast) b.EndFrame(dt);
 
         var h = new HashCode();
-        foreach (Bot b in bots) h.Add(b.PoseHash());
+        foreach (Bot b in cast) h.Add(b.PoseHash());
         h.Add(phase); h.Add(ball); h.Add(ballAngle);
         if (scene is not null) h.Add(frame);
         int hash = h.ToHashCode();
@@ -141,6 +167,7 @@ public sealed partial class StageView : FrameworkElement
         Point at = PointFromScreen(new Point(p.X, p.Y));
         cursorVx = dt > 0 && cursorSeen ? (at.X - cursor.X) / dt : 0;
         cursorVy = dt > 0 && cursorSeen ? (at.Y - cursor.Y) / dt : 0;
+        cursorStill = Math.Abs(at.X - cursor.X) + Math.Abs(at.Y - cursor.Y) > 0.5 ? 0 : cursorStill + dt;
         cursor = at;
         cursorSeen = true;
         WatchMouse(dt);
@@ -148,11 +175,15 @@ public sealed partial class StageView : FrameworkElement
 
     bool CursorOnTaskbar => cursor.Y >= GroundY;
 
-    /// <summary>True when the mouse is close to the taskbar or will get there within 0.4 s.</summary>
+    /// <summary>
+    /// True when the mouse is on the move close to the taskbar, or will get there within 0.4 s.
+    /// A pointer simply resting nearby (say, in a chat box at the bottom of a window) is no threat:
+    /// if it does go for the taskbar, whatever was borrowed snaps back the instant it arrives.
+    /// </summary>
     bool CursorThreatens()
     {
         double gap = GroundY - cursor.Y;
-        return gap < 110 || (cursorVy > 0 && gap / cursorVy < 0.4);
+        return (gap < 110 && cursorStill < 1.5) || (cursorVy > 0 && gap / cursorVy < 0.4);
     }
 
     static double Clamp01(double u) => Math.Clamp(u, 0, 1);
@@ -168,8 +199,8 @@ public sealed partial class StageView : FrameworkElement
     bool OnTaskbar(Rect slot) => Math.Abs(slot.Top - GroundY) < 8;
 
     /// <summary>Photographs one taskbar button. Null when it is highlighted or empty.</summary>
-    Shot? Shoot(Int32Rect button) =>
-        Taskbar.Capture(button, vertical: StageAngle % 180 != 0) is { } s
+    Shot? Shoot(Int32Rect button, bool whole = false) =>
+        Taskbar.Capture(button, vertical: StageAngle % 180 != 0, whole) is { } s
             ? new Shot(s.Icon, s.Cover, ToStage(button), s.Icon.PixelWidth / dpiScale,
                 button.Width / dpiScale, button.Height / dpiScale)
             : null;
@@ -199,10 +230,10 @@ public sealed partial class StageView : FrameworkElement
     /// <summary>Where each bot's feet are on the screen right now, in DIPs.</summary>
     public Point[] FeetOnScreen()
     {
-        var feet = new Point[bots.Length];
-        for (int i = 0; i < bots.Length; i++)
+        var feet = new Point[cast.Length];
+        for (int i = 0; i < cast.Length; i++)
         {
-            Point p = PointToScreen(new Point(double.IsNaN(bots[i].X) ? ActualWidth / 2 : bots[i].X, GroundY));
+            Point p = PointToScreen(new Point(double.IsNaN(cast[i].X) ? ActualWidth / 2 : cast[i].X, GroundY));
             feet[i] = new Point(p.X / dpiScale, p.Y / dpiScale);
         }
         return feet;
@@ -210,23 +241,23 @@ public sealed partial class StageView : FrameworkElement
 
     /// <summary>
     /// The taskbar has moved. Call with the old layout still in place, then make this element cover
-    /// the whole screen unrotated: the bots crouch, leap across the screen turning to the new "down",
+    /// the whole screen unrotated: the cast crouch, leap across the screen turning to the new "down",
     /// and land on the new edge. landing maps a position along the new taskbar to a screen point.
     /// </summary>
     public void BeginTransit(Point[] from, double toAngle, double newLength, Func<double, Point> landing, Action done)
     {
         AbortAll();
         double turn = (toAngle - StageAngle + 540) % 360 - 180;         // the short way round
-        var next = new Hop[bots.Length];
-        for (int i = 0; i < bots.Length; i++)
+        var next = new Hop[cast.Length];
+        for (int i = 0; i < cast.Length; i++)
         {
-            Bot b = bots[i];
+            Bot b = cast[i];
             b.External = true;
             double along = Math.Clamp((b.X - Edge) / Math.Max(1, ActualWidth - 2 * Edge), 0, 1);
             double newX = Edge + along * (newLength - 2 * Edge);
             Point to = landing(newX);
             double time = Math.Clamp((to - from[i]).Length / 900, 0.7, 1.5);
-            next[i] = new Hop(from[i], to, StageAngle, turn, newX, 0.3 * i, time);
+            next[i] = new Hop(from[i], to, StageAngle, turn, newX, 0.15 * i, time);
         }
         hops = next;
         hopClock = 0;
@@ -239,9 +270,9 @@ public sealed partial class StageView : FrameworkElement
     {
         hopClock += dt;
         bool allDown = true;
-        for (int i = 0; i < bots.Length; i++)
+        for (int i = 0; i < cast.Length; i++)
         {
-            Bot b = bots[i];
+            Bot b = cast[i];
             Hop h = hops![i];
             double t = hopClock - h.Delay;
             b.BeginPose(dt, ActualWidth);
@@ -265,19 +296,19 @@ public sealed partial class StageView : FrameworkElement
         hops = null;
         landed?.Invoke();                   // the window takes its place on the new edge
         landed = null;
-        for (int i = 0; i < bots.Length; i++)
+        for (int i = 0; i < cast.Length; i++)
         {
-            bots[i].X = finished[i].NewX;
-            bots[i].External = false;
-            bots[i].Kick(5);
+            cast[i].X = finished[i].NewX;
+            cast[i].External = false;
+            cast[i].Kick(5);
         }
     }
 
     void DrawTransit(DrawingContext dc)
     {
-        for (int i = 0; i < bots.Length; i++)
+        for (int i = 0; i < cast.Length; i++)
         {
-            Bot b = bots[i];
+            Bot b = cast[i];
             Hop h = hops![i];
             double u = Ease((hopClock - h.Delay - CrouchTime) / h.Time);
             Point p = Lerp(h.From, h.To, u);
@@ -443,8 +474,25 @@ public sealed partial class StageView : FrameworkElement
         InvalidateVisual();
     }
 
-    void BeginCatch()
+    /// <summary>Chooses the two who act in the next scene or game: free ones first.</summary>
+    void PickDuo(string? lead = null)
     {
+        var pool = new List<Bot>(cast);
+        pool.Sort((p, q) => (q.IsIdle ? 1 : 0).CompareTo(p.IsIdle ? 1 : 0));       // free bots to the front
+        int free = pool.FindAll(b => b.IsIdle).Count;
+        int span = Math.Max(2, free);
+        int i = rng.Next(span), j = (i + 1 + rng.Next(span - 1)) % span;
+        bots[0] = pool[i];
+        bots[1] = pool[j];
+        if (lead is not null && Array.Find(cast, b => b.Skin.Name == lead) is { } star && star != bots[1]) bots[0] = star;
+    }
+
+    bool catchTray;         // this round is played with an icon from the tray corner, not an app icon
+
+    void BeginCatch(bool tray = false)
+    {
+        catchTray = tray;
+        PickDuo();
         foreach (Bot b in bots) b.External = true;
         SetPhase(Phase.Scanning);
         int id = ++scanId;
@@ -458,7 +506,7 @@ public sealed partial class StageView : FrameworkElement
         if (scan is null || PresentationSource.FromVisual(this) is null) { EndGame(); return; }
 
         var candidates = new List<Int32Rect>();
-        foreach (Int32Rect r in scan.Apps)
+        foreach (Int32Rect r in catchTray ? scan.Tray : scan.Apps)
         {
             Rect slot = ToStage(r);
             double centre = slot.X + slot.Width / 2;
@@ -471,7 +519,7 @@ public sealed partial class StageView : FrameworkElement
             int pick = rng.Next(candidates.Count);
             Int32Rect r = candidates[pick];
             candidates.RemoveAt(pick);
-            if (Shoot(r) is not { } taken) continue;
+            if (Shoot(r, catchTray) is not { } taken) continue;
 
             shot = taken;
             double x = taken.Centre.X;
@@ -507,8 +555,17 @@ public sealed partial class StageView : FrameworkElement
 
         // Anything below the ground line is "behind" the taskbar.
         dc.PushClip(new RectangleGeometry(new Rect(0, 0, ActualWidth, GroundY)));
-        foreach (Bot b in bots) b.Draw(dc, GroundY);
+        foreach (Bot b in cast)
+            if (b != lowBot) b.Draw(dc, GroundY);
         dc.Pop();
+
+        // Whoever has climbed down into the taskbar is drawn over it.
+        if (lowBot is not null)
+        {
+            if (lowClip is not null) dc.PushClip(lowClip);
+            lowBot.Draw(dc, GroundY);
+            if (lowClip is not null) dc.Pop();
+        }
 
         sceneDraw?.Invoke(dc);
         if (iconOut) DrawIcon(dc, shot!, ball, ballAngle);

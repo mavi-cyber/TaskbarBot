@@ -19,7 +19,14 @@ public sealed partial class StageView
         ("fish", "Fish for trash"), ("laser", "Chase the mouse"), ("push", "Lift the window"),
         ("graffiti", "Graffiti on the clock"), ("bowl", "Icon bowling"), ("moon", "Taunt"),
         ("shove", "Shove an icon"), ("scare", "Sneak-up scare"), ("tower", "Piggyback tower"),
-        ("tag", "Tag"), ("faces", "Pull faces"),
+        ("tag", "Tag"), ("faces", "Pull faces"), ("chat", "Have a chat"),
+        ("search", "Dive into the search box"), ("stroll", "Stroll inside the taskbar"), ("clock", "Check the time"),
+        ("battery", "Check the battery"), ("wifi", "Fix the network"),
+        ("mess", "Wreck the pinned icons"), ("fight", "Fight"), ("party", "Party"), ("football", "Football"),
+        ("race", "Race"), ("hide", "Hide and seek"), ("dinner", "Dinner for two"),
+        ("trayhop", "Hop along the tray icons"), ("trampoline", "Bounce on the tray arrow"), ("volume", "Listen at the speaker"),
+        ("language", "Try the language button"), ("date", "What day is it?"),
+        ("traycatch", "Play catch with a tray icon"), ("trayball", "Football with a tray icon"),
     };
 
     IEnumerator<int>? scene;
@@ -42,7 +49,7 @@ public sealed partial class StageView
     /// <summary>Plays the named scene as soon as it can (taskbar scenes wait for the mouse to move away).</summary>
     public void PlayScene(string name)
     {
-        foreach (Bot b in bots) b.CancelMove();
+        foreach (Bot b in cast) b.CancelMove();
         wanted = name;
     }
 
@@ -93,22 +100,23 @@ public sealed partial class StageView
             if (clicks.Count >= 3) { clicks.Clear(); pick = "moon"; }
             else if (hoverDwell >= 4 && shoveCooldown <= 0) pick = "shove";
             else if (laserHeat > 0.45 && laserCooldown <= 0) pick = "laser";
+            else if (eventScene is not null) { pick = eventScene; eventScene = null; }
             else if (idle >= 120 && !stoleThisIdle) pick = "start";
             else if (clock.Minute == 0 && clock.Hour != graffitiHour) pick = "graffiti";
             else
             {
                 nextAmbient -= dt;
-                if (nextAmbient <= 0 && bots[0].IsIdle && bots[1].IsIdle) pick = PickAmbient();
+                if (nextAmbient <= 0 && Array.FindAll(cast, b => b.IsIdle).Length >= 2) pick = PickAmbient();
             }
         }
         if (pick is null) return;
 
         // Scenes that cover part of the taskbar never start with the mouse on its way there.
-        if (pick is "catch" or "start" or "graffiti" or "bowl" && CursorThreatens()) return;
+        if (pick is "catch" or "start" or "graffiti" or "bowl" or "search" or "stroll" or "mess" or "trayhop" or "trampoline" or "traycatch" or "trayball" && CursorThreatens()) return;
 
         forced = wanted is not null;
         wanted = null;
-        nextAmbient = 50 + rng.NextDouble() * 80;
+        nextAmbient = 35 + rng.NextDouble() * 55;
         switch (pick)
         {
             case "start": stoleThisIdle = true; break;
@@ -117,8 +125,9 @@ public sealed partial class StageView
             case "shove": shoveCooldown = 60; hoverDwell = 0; break;
         }
 
-        if (pick == "catch") BeginCatch();
-        else if (pick is "start" or "graffiti" or "bowl" or "moon" or "shove")
+        if (pick is "catch" or "traycatch") BeginCatch(tray: pick == "traycatch");
+        else if (pick is "start" or "graffiti" or "bowl" or "moon" or "shove" or "search" or "clock" or "battery" or "wifi" or "mess"
+                 or "trayhop" or "trampoline" or "volume" or "language" or "date" or "trayball")
         {
             pendingScan = true;
             string name = pick;
@@ -136,9 +145,27 @@ public sealed partial class StageView
         var pool = new List<(string Name, int Weight)>
         {
             ("catch", 3), ("fish", 2), ("graffiti", 1), ("bowl", 2),
-            ("scare", 2), ("tower", 2), ("tag", 2), ("faces", 2),
+            ("scare", 2), ("tower", 2), ("tag", 2), ("faces", 2), ("chat", 4),
         };
         if (WindowOnTaskbar() is not null) pool.Add(("push", 2));
+        pool.Add(("search", 3));
+        pool.Add(("stroll", 3));
+        pool.Add(("clock", 2));
+        pool.Add(("mess", 3));
+        pool.Add(("fight", 2));
+        pool.Add(("football", 2));
+        pool.Add(("race", 2));
+        pool.Add(("hide", 2));
+        pool.Add(("dinner", 2));
+        pool.Add(("party", 1));
+        pool.Add(("trayhop", 3));
+        pool.Add(("traycatch", 3));
+        pool.Add(("trayball", 3));
+        pool.Add(("trampoline", 2));
+        pool.Add(("volume", 2));
+        pool.Add(("language", 1));
+        pool.Add(("date", 1));
+        if (lastSurvey?.Battery is not null) pool.Add(("battery", 1));
         pool.RemoveAll(p => p.Name == lastAmbient);
 
         int total = 0;
@@ -161,6 +188,25 @@ public sealed partial class StageView
         IEnumerable<int>? script = name switch
         {
             "start" when scan is not null => StartSteal(scan),
+            "search" when scan is not null => SearchDive(scan),
+            "clock" when scan is not null => ClockCheck(scan),
+            "battery" when scan is not null => BatteryCare(scan),
+            "wifi" when scan is not null => WifiFix(scan),
+            "stroll" => Stroll(),
+            "newapp" => NewApp(),
+            "mess" when scan is not null => Mess(scan),
+            "trayhop" when scan is not null => TrayHop(scan),
+            "trampoline" when scan is not null => Trampoline(scan),
+            "volume" when scan is not null => VolumeCheck(scan),
+            "language" when scan is not null => LanguageTry(scan),
+            "date" when scan is not null => DateCheck(scan),
+            "fight" => Fight(),
+            "party" => Party(),
+            "football" => Football(null),
+            "trayball" when scan is not null => Football(scan),
+            "race" => Race(),
+            "hide" => HideSeek(),
+            "dinner" => Dinner(),
             "graffiti" when scan is not null => Graffiti(scan),
             "bowl" when scan is not null => Bowling(scan),
             "moon" when scan is not null => Mooning(scan),
@@ -172,10 +218,12 @@ public sealed partial class StageView
             "tower" => Tower(),
             "tag" => TagGame(),
             "faces" => Faces(),
+            "chat" => Chat(),
             _ => null,
         };
         if (script is null) return;
 
+        PickDuo(name == "laser" ? "Mochi" : null);      // the cat is the one who chases the dot
         foreach (Bot b in bots) b.External = true;
         sa = 0;
         sceneFrames = 0;
@@ -199,7 +247,9 @@ public sealed partial class StageView
         sceneUnder = sceneDraw = null;
         stanceA = stanceB = null;
         sceneOverTaskbar = false;
-        foreach (Bot b in bots) b.External = false;
+        lowBot = null;
+        lowClip = null;
+        foreach (Bot b in cast) b.External = false;      // a party borrows the whole cast
         if (sceneFrames < 3) nextAmbient = 8;       // it could not run; try something else soon
         InvalidateVisual();
     }
@@ -221,6 +271,23 @@ public sealed partial class StageView
         while (!bot.WalkToward(x, fdt, speed, false)) yield return 0;
     }
 
+    /// <summary>Goes to x: a walk if it is close, a run if it is a long way off.</summary>
+    IEnumerable<int> Hurry(Bot bot, double x)
+    {
+        while (true)
+        {
+            int way = Math.Sign(x - bot.X);
+            bool far = Math.Abs(x - bot.X) > 50 * Cell;
+            if (bot.WalkToward(x, fdt, far ? 80 : 30, false)) yield break;
+            if (far)
+            {
+                bot.Ghosts(1, way);
+                bot.Tilt(way * 10);
+            }
+            yield return 0;
+        }
+    }
+
     IEnumerable<int> WalkBoth(double ax, double bx, double speed = 22)
     {
         while (true)
@@ -231,12 +298,29 @@ public sealed partial class StageView
         }
     }
 
-    void Nearest(double x) => sa = Math.Abs(bots[0].X - x) <= Math.Abs(bots[1].X - x) ? 0 : 1;
+    /// <summary>
+    /// Makes A whoever is closest to x. A free bystander who is closer than both actors takes
+    /// the lead role over, so the one who reacts to something is the one standing next to it.
+    /// </summary>
+    void Nearest(double x)
+    {
+        Bot best = bots[0];
+        foreach (Bot b in cast)
+            if ((b.IsIdle || b == bots[1]) && Math.Abs(b.X - x) < Math.Abs(best.X - x)) best = b;
+        if (best == bots[1]) { sa = 1; return; }
+        if (best != bots[0])
+        {
+            bots[0].External = false;
+            bots[0] = best;
+            best.External = true;
+        }
+        sa = 0;
+    }
 
     double InStage(double x) => Math.Clamp(x, Edge, Math.Max(Edge, ActualWidth - Edge));
 
     Point Over(Bot bot, double cellsAboveHead) =>
-        new(bot.X, GroundY - bot.Lift - (Bot.Rows + cellsAboveHead) * Cell);
+        new(bot.X, GroundY - bot.Lift - bot.Height - cellsAboveHead * Cell);
 
     Geometry AboveGround => new RectangleGeometry(new Rect(0, 0, ActualWidth, GroundY));
 
@@ -438,7 +522,8 @@ public sealed partial class StageView
     IEnumerable<int> Laser()
     {
         double c = Cell;
-        Nearest(cursor.X);
+        if (bots[0].Skin.Name == "Mochi") sa = 0;
+        else Nearest(cursor.X);
         Bot a = A, b = B;
         double total = 0, still = 0, pounce = 0, tumble = -1;
         int side = Math.Sign(a.X - b.X), knock = 1;
@@ -911,10 +996,11 @@ public sealed partial class StageView
     /// <summary>A climbs onto B's head, B carries it, it ends the way it always does.</summary>
     IEnumerable<int> Tower()
     {
-        double c = Cell, top = Bot.Rows * c;
+        double c = Cell;
         sa = rng.Next(2);
         Bot a = A, b = B;
         int s = a.X >= b.X ? 1 : -1;
+        double top = b.Height;
 
         foreach (var _ in Walk(a, b.X + s * 12 * c)) yield return 0;
         foreach (var _ in Over(0.3, u => b.Squash(u))) yield return 0;
@@ -1030,5 +1116,93 @@ public sealed partial class StageView
             a.Lift = 2.5 * c * Arc(u * 4 % 1);
             b.Lift = 2.5 * c * Arc((u * 4 + 0.5) % 1);
         })) yield return 0;
+    }
+
+    /// <summary>Two of them stop for a chat: one talks, the other listens, then they swap.</summary>
+    IEnumerable<int> Chat()
+    {
+        double c = Cell;
+        sa = bots[0].X <= bots[1].X ? 0 : 1;                        // A is the left one
+        Bot a = A, b = B;
+        double mid = Math.Clamp((a.X + b.X) / 2, Edge + 9 * c, ActualWidth - Edge - 9 * c);
+        foreach (var _ in WalkBoth(mid - 9 * c, mid + 9 * c)) yield return 0;
+
+        string[] lines = { Props.Speech, Props.Question, Props.Bang, Props.Laugh, Props.Idea, Props.Speech };
+        int turns = 4 + rng.Next(4);
+        for (int turn = 0; turn < turns; turn++)
+        {
+            Bot talker = turn % 2 == 0 ? a : b, listener = turn % 2 == 0 ? b : a;
+            int facing = talker == a ? 1 : -1;
+            string line = lines[rng.Next(lines.Length)];
+            foreach (var _ in Over(1.1 + rng.NextDouble() * 0.9, u =>
+            {
+                bool beat = (int)(u * 6) % 2 == 0;
+                talker.Say(line);
+                talker.Look(facing * 0.5, 0);
+                talker.Arms(facing < 0 && beat ? -1 : 0, facing > 0 && beat ? -1 : 0);      // talks with its hands
+                listener.Look(-facing * 0.5, beat ? 0.2 : 0);                               // nods along
+                if (line == Props.Laugh) listener.Lift = 1.5 * c * Arc(u * 3 % 1);
+            })) yield return 0;
+        }
+
+        // A wave goodbye.
+        foreach (var _ in Over(1.2, u =>
+        {
+            bool up = (int)(u * 6) % 2 == 0;
+            a.Arms(0, up ? -2 : -1);
+            b.Arms(up ? -2 : -1, 0);
+            a.Look(0.5, 0);
+            b.Look(-0.5, 0);
+        })) yield return 0;
+    }
+
+    // ---- Everyday life: the whole cast reacts to what is going on at the PC ----
+
+    bool wasAway, plugged = true, powerSeen;
+    double moodIn, glanceCooldown;
+    IntPtr lastWindow;
+
+    void Live(double dt)
+    {
+        // Somebody came back to the PC after a while: they wave hello.
+        double idle = Taskbar.IdleSeconds();
+        if (idle > 90) wasAway = true;
+        else if (wasAway && idle < 2)
+        {
+            wasAway = false;
+            foreach (Bot b in cast) b.Queue(Move.Wave, rng.NextDouble() * 1.5);
+        }
+
+        // A new window came to the front: a couple of them look up to see what it is.
+        glanceCooldown -= dt;
+        IntPtr window = Taskbar.ForegroundHandle();
+        if (window != lastWindow)
+        {
+            lastWindow = window;
+            if (glanceCooldown <= 0)
+            {
+                glanceCooldown = 25;
+                for (int i = 0; i < 2; i++) cast[rng.Next(cast.Length)].Queue(Move.LookAround, 0.3 + rng.NextDouble());
+            }
+        }
+
+        moodIn -= dt;
+        if (moodIn > 0) return;
+        moodIn = 5;
+
+        // Charger plugged in: a little jump of joy. Pulled out: they look around, worried.
+        var power = System.Windows.Forms.SystemInformation.PowerStatus;
+        bool online = power.PowerLineStatus != System.Windows.Forms.PowerLineStatus.Offline;
+        if (powerSeen && online != plugged)
+            foreach (Bot b in cast) b.Queue(online ? Move.Jump : Move.LookAround, rng.NextDouble() * 1.2);
+        plugged = online;
+        powerSeen = true;
+
+        // Late at night, with nobody around, or on a nearly flat battery they get drowsy.
+        int hour = DateTime.Now.Hour;
+        bool night = hour >= 23 || hour < 6;
+        bool flat = !online && power.BatteryLifePercent < 0.2f;
+        double sleepy = night ? 1 : idle > 90 ? 0.7 : flat ? 0.6 : 0;
+        foreach (Bot b in cast) b.Sleepy = sleepy;
     }
 }

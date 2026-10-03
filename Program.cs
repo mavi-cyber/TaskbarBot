@@ -88,6 +88,8 @@ sealed class BotWindow : Window
             if (Array.IndexOf(args, "--demo") >= 0) bot.PlayAll();
             int at = Array.IndexOf(args, "--scene");
             if (at >= 0 && at + 1 < args.Length) bot.PlayScene(args[at + 1]);
+            at = Array.IndexOf(args, "--move");
+            if (at >= 0 && at + 1 < args.Length && Enum.TryParse(args[at + 1], true, out Move move)) bot.Play(move);
         };
         kickoff.Start();
 
@@ -258,12 +260,16 @@ sealed class BotWindow : Window
             ("Walk", Move.Walk), ("Dash", Move.Dash), ("Jump", Move.Jump), ("Look around", Move.LookAround),
             ("Wave", Move.Wave), ("Dance", Move.Dance), ("Sleep", Move.Sleep), ("Spin", Move.Spin),
             ("Squash bounce", Move.Bounce), ("Peek", Move.Peek),
+            ("Yawn", Move.Yawn), ("Sit and rest", Move.Rest), ("Check phone", Move.Phone), ("Sneeze", Move.Sneeze),
+            ("Work out", Move.Workout), ("Drink coffee", Move.Coffee), ("Read a book", Move.Read),
+            ("Eat", Move.Eat), ("Sweep up", Move.Sweep), ("Phone call", Move.Call), ("Sing", Move.Sing),
         };
+        var movesMenu = new Forms.ToolStripMenuItem("Moves");
         foreach (var (text, move) in moves)
-            menu.Items.Add(text, null, (_, _) => bot.Play(move));
-
-        menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("Show all moves", null, (_, _) => bot.PlayAll());
+            movesMenu.DropDownItems.Add(text, null, (_, _) => bot.Play(move));
+        movesMenu.DropDownItems.Add(new Forms.ToolStripSeparator());
+        movesMenu.DropDownItems.Add("Show all moves", null, (_, _) => bot.PlayAll());
+        menu.Items.Add(movesMenu);
 
         var scenes = new Forms.ToolStripMenuItem("Scenes");
         foreach (var (name, title) in StageView.Scenes)
@@ -307,22 +313,17 @@ sealed class BotWindow : Window
         tray.Visible = true;
     }
 
-    /// <summary>The tray icon is the bot itself, drawn from the same cell grid.</summary>
+    /// <summary>The tray icon is the program's own icon.</summary>
     static System.Drawing.Icon MakeIcon()
     {
-        using var bmp = new System.Drawing.Bitmap(32, 32);
-        using (var g = System.Drawing.Graphics.FromImage(bmp))
-        using (var body = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(0xD9, 0x77, 0x57)))
-        using (var eye = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(0x1F, 0x1E, 0x1D)))
+        try
         {
-            const int c = 2, ox = 4, oy = 8;
-            g.FillRectangle(body, ox + 2 * c, oy, 8 * c, 6 * c);
-            g.FillRectangle(body, ox, oy + 2 * c, 12 * c, 2 * c);
-            foreach (int col in new[] { 2, 4, 7, 9 }) g.FillRectangle(body, ox + col * c, oy + 6 * c, c, 2 * c);
-            g.FillRectangle(eye, ox + 3 * c, oy + c, c, c);
-            g.FillRectangle(eye, ox + 8 * c, oy + c, c, c);
+            if (Environment.ProcessPath is { } exe && System.Drawing.Icon.ExtractAssociatedIcon(exe) is { } icon)
+                return icon;
         }
-        return System.Drawing.Icon.FromHandle(bmp.GetHicon());
+        catch (IOException) { }
+        catch (ArgumentException) { }
+        return System.Drawing.SystemIcons.Application;
     }
 
     static double LoadSize()
